@@ -39,6 +39,7 @@ class ESMCOutput:
     sequence_logits: torch.Tensor
     embeddings: torch.Tensor | None
     hidden_states: torch.Tensor | None
+    attentions: tuple[torch.Tensor, ...] | None  # (n_layers,) each [B, n_heads, L, L]
 
 
 class ESMC(nn.Module, ESMCInferenceClient):
@@ -118,6 +119,7 @@ class ESMC(nn.Module, ESMCInferenceClient):
         self,
         sequence_tokens: torch.Tensor | None = None,
         sequence_id: torch.Tensor | None = None,
+        output_attentions: bool = False,
     ) -> ESMCOutput:
         """
         Performs forward pass through the ESMC model. Check utils to see how to tokenize inputs from raw data.
@@ -125,11 +127,22 @@ class ESMC(nn.Module, ESMCInferenceClient):
         Args:
             sequence_tokens (torch.Tensor, optional): The amino acid tokens.
             sequence_id (torch.Tensor, optional): The sequence ID.
+            output_attentions (bool, optional): If True, return attention weights from each layer.
+                Note: This requires use_flash_attn=False since flash attention cannot return
+                attention weights. Defaults to False.
 
         Returns:
-            ESMCOutput: The output of the ESMC model.
+            ESMCOutput: The output of the ESMC model, including attention weights if requested.
 
+        Raises:
+            ValueError: If output_attentions=True but the model was initialized with use_flash_attn=True.
         """
+        if output_attentions and self._use_flash_attn:
+            raise ValueError(
+                "Cannot output attention weights when using flash attention. "
+                "Initialize the model with use_flash_attn=False to enable attention weight output."
+            )
+
         if sequence_id is None:
             # For EMSC, a boolean mask is created in place of sequence_id if not specified.
             sequence_id = sequence_tokens != self.tokenizer.pad_token_id
@@ -151,7 +164,9 @@ class ESMC(nn.Module, ESMCInferenceClient):
         else:
             indices = None
 
-        x, _, hiddens = self.transformer(x, sequence_id=sequence_id)
+        x, _, hiddens, attentions = self.transformer(
+            x, sequence_id=sequence_id, output_attentions=output_attentions
+        )
 
         if self._use_flash_attn:
             assert indices is not None
@@ -168,7 +183,10 @@ class ESMC(nn.Module, ESMCInferenceClient):
 
         sequence_logits = self.sequence_head(x)
         output = ESMCOutput(
-            sequence_logits=sequence_logits, embeddings=x, hidden_states=hiddens
+            sequence_logits=sequence_logits,
+            embeddings=x,
+            hidden_states=hiddens,
+            attentions=tuple(attentions) if attentions else None,
         )
         return output
 

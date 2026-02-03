@@ -45,7 +45,21 @@ class MultiHeadAttention(nn.Module):
         k = k.flatten(-2, -1)
         return q, k
 
-    def forward(self, x, seq_id):
+    def forward(
+        self, x: torch.Tensor, seq_id: torch.Tensor | None, output_attentions: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        Forward pass for multi-head attention.
+
+        Args:
+            x: Input tensor of shape [B, L, D]
+            seq_id: Sequence ID tensor for masking, shape [B, L]
+            output_attentions: If True, return attention weights
+
+        Returns:
+            Tuple of (output, attention_weights) where attention_weights is
+            [B, n_heads, L, L] if output_attentions=True, else None
+        """
         qkv_BLD3 = self.layernorm_qkv(x)
         query_BLD, key_BLD, value_BLD = torch.chunk(qkv_BLD3, 3, dim=-1)
         query_BLD, key_BLD = (
@@ -62,7 +76,22 @@ class MultiHeadAttention(nn.Module):
             reshaper, (query_BLD, key_BLD, value_BLD)
         )
 
-        if seq_id is not None:
+        attn_weights = None
+
+        if output_attentions:
+            # Manual attention computation to return weights
+            scale = self.d_head**-0.5
+            attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * scale
+
+            if seq_id is not None:
+                # Where True, enable participation in attention.
+                mask_BLL = seq_id.unsqueeze(-1) == seq_id.unsqueeze(-2)
+                mask_BHLL = mask_BLL.unsqueeze(1)
+                attn_weights = attn_weights.masked_fill(~mask_BHLL, float("-inf"))
+
+            attn_weights = F.softmax(attn_weights, dim=-1)
+            context_BHLD = torch.matmul(attn_weights, value_BHLD)
+        elif seq_id is not None:
             # Where True, enable participation in attention.
             mask_BLL = seq_id.unsqueeze(-1) == seq_id.unsqueeze(-2)
             mask_BHLL = mask_BLL.unsqueeze(1)
@@ -79,7 +108,7 @@ class MultiHeadAttention(nn.Module):
 
         context_BLD = einops.rearrange(context_BHLD, "b h s d -> b s (h d)")
 
-        return self.out_proj(context_BLD)
+        return self.out_proj(context_BLD), attn_weights
 
 
 class FlashMultiHeadAttention(MultiHeadAttention):
@@ -93,7 +122,24 @@ class FlashMultiHeadAttention(MultiHeadAttention):
         # Flash attention rotary.
         self.rotary = TritonRotaryEmbedding(d_model // n_heads)
 
-    def forward(self, x, seq_id):
+    def forward(
+        self, x: torch.Tensor, seq_id: torch.Tensor, output_attentions: bool = False
+    ) -> tuple[torch.Tensor, None]:
+        """
+        Forward pass for flash multi-head attention.
+
+        Note: Flash attention cannot return attention weights by design.
+        The output_attentions parameter is accepted for interface compatibility
+        but will always return None for attention weights.
+
+        Args:
+            x: Input tensor of shape [N, D] (unpadded)
+            seq_id: Boolean mask tensor, shape [B, L]
+            output_attentions: Ignored - flash attention cannot return weights
+
+        Returns:
+            Tuple of (output, None) - attention weights are always None
+        """
         assert seq_id.dtype == torch.bool
 
         seqlens = seq_id.sum(dim=-1, dtype=torch.int32)
@@ -119,4 +165,4 @@ class FlashMultiHeadAttention(MultiHeadAttention):
         )
         context_ND = einops.rearrange(context_NHD, "n h d -> n (h d)")
 
-        return self.out_proj(context_ND)
+        return self.out_proj(context_ND), None

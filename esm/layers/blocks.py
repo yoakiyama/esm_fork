@@ -121,7 +121,8 @@ class UnifiedTransformerBlock(nn.Module):
         frames: Affine3D,
         frames_mask: torch.Tensor,
         chain_id: torch.Tensor,
-    ) -> torch.Tensor:
+        output_attentions: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Forward pass for the UnifiedTransformerBlock.
 
@@ -137,14 +138,18 @@ class UnifiedTransformerBlock(nn.Module):
             Boolean mask tensor indicating valid frames for geometric attention.
         chain_id : torch.Tensor[int]
             Tensor containing chain IDs for each element, used for attention masking in geometric attention.
+        output_attentions : bool
+            If True, return attention weights from the multi-head attention layer.
 
         Returns
         -------
-        torch.Tensor[float]
-            The output tensor after applying the transformer block operations.
+        tuple[torch.Tensor[float], torch.Tensor[float] | None]
+            The output tensor after applying the transformer block operations, and
+            attention weights of shape [B, n_heads, L, L] if output_attentions=True, else None.
         """
+        attn_weights = None
         if self.use_plain_attn:
-            r1 = self.attn(x, sequence_id)
+            r1, attn_weights = self.attn(x, sequence_id, output_attentions=output_attentions)
             x = x + r1 / self.scaling_factor
 
         if self.use_geom_attn:
@@ -154,4 +159,4 @@ class UnifiedTransformerBlock(nn.Module):
         r3 = self.ffn(x) / self.scaling_factor
         x = x + r3
 
-        return x
+        return x, attn_weights

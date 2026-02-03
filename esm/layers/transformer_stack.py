@@ -68,7 +68,8 @@ class TransformerStack(nn.Module):
         affine: Affine3D | None = None,
         affine_mask: torch.Tensor | None = None,
         chain_id: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
+        output_attentions: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor], list[torch.Tensor] | None]:
         """
         Forward pass of the TransformerStack.
 
@@ -79,16 +80,23 @@ class TransformerStack(nn.Module):
             affine_mask (torch.Tensor | None): The affine mask tensor or None.
             chain_id (torch.Tensor): The protein chain tensor of shape (batch_size, sequence_length).
                 Only used in geometric attention.
+            output_attentions (bool): If True, return attention weights from each layer.
 
         Returns:
             post_norm: The output tensor of shape (batch_size, sequence_length, d_model).
             pre_norm: The embedding of shape (batch_size, sequence_length, d_model).
+            hiddens: List of hidden states from each layer.
+            attentions: List of attention weights from each layer if output_attentions=True,
+                each of shape (batch_size, n_heads, sequence_length, sequence_length), else None.
         """
         *batch_dims, _ = x.shape
         if chain_id is None:
             chain_id = torch.ones(size=batch_dims, dtype=torch.int64, device=x.device)
         hiddens = []
+        attentions = [] if output_attentions else None
         for block in self.blocks:
-            x = block(x, sequence_id, affine, affine_mask, chain_id)
+            x, attn_weights = block(x, sequence_id, affine, affine_mask, chain_id, output_attentions=output_attentions)
             hiddens.append(x)
-        return self.norm(x), x, hiddens
+            if output_attentions and attn_weights is not None:
+                attentions.append(attn_weights)
+        return self.norm(x), x, hiddens, attentions
