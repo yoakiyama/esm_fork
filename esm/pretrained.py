@@ -1,4 +1,5 @@
-from typing import Callable
+from typing import Callable, Optional
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -56,25 +57,32 @@ def ESM3_function_decoder_v0(device: torch.device | str = "cpu"):
     return model
 
 
-def ESMC_300M_202412(device: torch.device | str = "cpu", use_flash_attn: bool = True):
+def ESMC_300M_202412(device: torch.device | str = "cpu", use_flash_attn: bool = True, init_contact_head: bool = False, contact_head_weights_path: Optional[str] = None):
     with torch.device(device):
+        print(init_contact_head)
         model = ESMC(
             d_model=960,
             n_heads=15,
             n_layers=30,
             tokenizer=get_esmc_model_tokenizers(),
             use_flash_attn=use_flash_attn,
+            init_contact_head=init_contact_head,
         ).eval()
     state_dict = torch.load(
         data_root("esmc-300") / "data/weights/esmc_300m_2024_12_v0.pth",
         map_location=device,
     )
+    if init_contact_head:
+        assert contact_head_weights_path is not None, "contact_head_weights_path must be provided if init_contact_head is True"
+        contact_head_state_dict = torch.load(contact_head_weights_path, map_location=device)
+        state_dict['contact_head.regression.weight'] = contact_head_state_dict['weight']
+        state_dict['contact_head.regression.bias'] = contact_head_state_dict['bias']
     model.load_state_dict(state_dict)
 
     return model
 
 
-def ESMC_600M_202412(device: torch.device | str = "cpu", use_flash_attn: bool = True):
+def ESMC_600M_202412(device: torch.device | str = "cpu", use_flash_attn: bool = True, init_contact_head: bool = False, contact_head_weights_path: Optional[str] = None):
     with torch.device(device):
         model = ESMC(
             d_model=1152,
@@ -82,11 +90,17 @@ def ESMC_600M_202412(device: torch.device | str = "cpu", use_flash_attn: bool = 
             n_layers=36,
             tokenizer=get_esmc_model_tokenizers(),
             use_flash_attn=use_flash_attn,
+            init_contact_head=init_contact_head,
         ).eval()
     state_dict = torch.load(
         data_root("esmc-600") / "data/weights/esmc_600m_2024_12_v0.pth",
         map_location=device,
     )
+    if init_contact_head:
+        assert contact_head_weights_path is not None, "contact_head_weights_path must be provided if init_contact_head is True"
+        contact_head_state_dict = torch.load(contact_head_weights_path, map_location=device)
+        state_dict['contact_head.regression.weight'] = contact_head_state_dict['weight']
+        state_dict['contact_head.regression.bias'] = contact_head_state_dict['bias']
     model.load_state_dict(state_dict)
 
     return model
@@ -122,11 +136,17 @@ LOCAL_MODEL_REGISTRY: dict[str, ModelBuilder] = {
 
 
 def load_local_model(
-    model_name: str, device: torch.device = torch.device("cpu")
+    model_name: str, device: torch.device = torch.device("cpu"), use_flash_attn: bool = True, 
+    init_contact_head: bool = False, contact_head_weights_path: Optional[Path] = None,
 ) -> nn.Module:
     if model_name not in LOCAL_MODEL_REGISTRY:
         raise ValueError(f"Model {model_name} not found in local model registry.")
-    return LOCAL_MODEL_REGISTRY[model_name](device)
+    params = {"device": device}
+    if model_name in [ESMC_300M, ESMC_600M]:
+        params["use_flash_attn"] = use_flash_attn
+        params["init_contact_head"] = init_contact_head
+        params["contact_head_weights_path"] = contact_head_weights_path
+    return LOCAL_MODEL_REGISTRY[model_name](**params)
 
 
 # Register custom versions of ESM3 for use with the local inference API

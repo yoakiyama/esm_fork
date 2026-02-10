@@ -99,4 +99,5 @@ class TransformerStack(nn.Module):
             hiddens.append(x)
             if output_attentions and attn_weights is not None:
                 attentions.append(attn_weights)
+        
         return self.norm(x), x, hiddens, attentions

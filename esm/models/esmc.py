@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import contextlib
-
+from pathlib import Path
 import attr
 import torch
 import torch.nn as nn
+import numpy as np
 from attr import dataclass
+from tqdm import tqdm
+from typing import Optional
+
+from esm.layers.contact import symmetrize, apc, ContactPredictionHead
 
 try:
     from flash_attn.bert_padding import pad_input, unpad_input  # type:ignore
@@ -40,7 +45,7 @@ class ESMCOutput:
     embeddings: torch.Tensor | None
     hidden_states: torch.Tensor | None
     attentions: tuple[torch.Tensor, ...] | None  # (n_layers,) each [B, n_heads, L, L]
-
+    contacts: torch.Tensor | None
 
 class ESMC(nn.Module, ESMCInferenceClient):
     """
@@ -59,6 +64,7 @@ class ESMC(nn.Module, ESMCInferenceClient):
         n_layers: int,
         tokenizer: EsmSequenceTokenizer,
         use_flash_attn: bool = True,
+        init_contact_head: bool = False
     ):
         super().__init__()
         self.embed = nn.Embedding(64, d_model)
@@ -75,16 +81,18 @@ class ESMC(nn.Module, ESMCInferenceClient):
 
         self.sequence_head = RegressionHead(d_model, 64)
         self.tokenizer = tokenizer
+        if init_contact_head:
+            self.contact_head = ContactPredictionHead(n_layers * n_heads, bias=True)
 
     @classmethod
     def from_pretrained(
-        cls, model_name: str = ESMC_600M, device: torch.device | None = None
+        cls, model_name: str = ESMC_600M, device: torch.device | None = None, use_flash_attn: bool = True, init_contact_head: bool = False, contact_head_weights_path: Optional[Path] = None
     ) -> ESMC:
         from esm.pretrained import load_local_model
 
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = load_local_model(model_name, device=device)
+        model = load_local_model(model_name, device=device, use_flash_attn=use_flash_attn, init_contact_head=init_contact_head, contact_head_weights_path=contact_head_weights_path)
         if device.type != "cpu":
             model = model.to(torch.bfloat16)
         assert isinstance(model, ESMC)
@@ -120,6 +128,7 @@ class ESMC(nn.Module, ESMCInferenceClient):
         sequence_tokens: torch.Tensor | None = None,
         sequence_id: torch.Tensor | None = None,
         output_attentions: bool = False,
+        return_contacts: bool = False
     ) -> ESMCOutput:
         """
         Performs forward pass through the ESMC model. Check utils to see how to tokenize inputs from raw data.
@@ -130,7 +139,7 @@ class ESMC(nn.Module, ESMCInferenceClient):
             output_attentions (bool, optional): If True, return attention weights from each layer.
                 Note: This requires use_flash_attn=False since flash attention cannot return
                 attention weights. Defaults to False.
-
+            return_contacts (bool, optional): If True, return contact predictions. Defaults to False.
         Returns:
             ESMCOutput: The output of the ESMC model, including attention weights if requested.
 
@@ -181,12 +190,20 @@ class ESMC(nn.Module, ESMCInferenceClient):
         # Stack hidden states into a [n_layers, B, L, D] matrix.
         hiddens = torch.stack(hiddens, dim=0)  # type: ignore
 
+        # Compute contact predictions
+        contacts = None
+        if return_contacts:
+            contact_attentions = torch.stack(attentions, dim=1)
+            contact_attentions = contact_attentions[..., 1:-1, 1:-1] # Drop BOS and EOS tokens
+            contacts = self.contact_head(contact_attentions)
+
         sequence_logits = self.sequence_head(x)
         output = ESMCOutput(
             sequence_logits=sequence_logits,
             embeddings=x,
             hidden_states=hiddens,
             attentions=tuple(attentions) if attentions else None,
+            contacts=contacts,
         )
         return output
 
