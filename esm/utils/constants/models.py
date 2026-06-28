@@ -8,6 +8,7 @@ ESM3_STRUCTURE_DECODER_V0 = "esm3_structure_decoder_v0"
 ESM3_FUNCTION_DECODER_V0 = "esm3_function_decoder_v0"
 ESMC_600M = "esmc_600m"
 ESMC_300M = "esmc_300m"
+ESMC_6B = "esmc_6b"
 
 
 def forge_only_return_single_layer_hidden_states(model_name: str):

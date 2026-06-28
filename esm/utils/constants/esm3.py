@@ -102,11 +102,13 @@ def data_root(model: str):
         return Path("")
     # Try to download from hugginface if it doesn't exist
     if model.startswith("esm3"):
-        path = Path(snapshot_download(repo_id="EvolutionaryScale/esm3-sm-open-v1"))
+        path = Path(snapshot_download(repo_id="biohub/esm3-sm-open-v1"))
     elif model.startswith("esmc-300"):
-        path = Path(snapshot_download(repo_id="EvolutionaryScale/esmc-300m-2024-12"))
+        path = Path(snapshot_download(repo_id="biohub/esmc-300m-2024-12"))
     elif model.startswith("esmc-600"):
-        path = Path(snapshot_download(repo_id="EvolutionaryScale/esmc-600m-2024-12"))
+        path = Path(snapshot_download(repo_id="biohub/esmc-600m-2024-12"))
+    elif model.startswith("esmc-6b"):
+        path = Path(snapshot_download(repo_id="biohub/esmc-6b-2024-12"))
     else:
         raise ValueError(f"{model=} is an invalid model name.")
     return path
